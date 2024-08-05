@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace SMTPValidateEmail;
 
@@ -169,6 +171,13 @@ class Validator
     private $domains = [];
 
     /**
+     * Holds the domain we are currently working on
+     *
+     * @var string
+     */
+    private $currentDomain = '';
+
+    /**
      * @var array
      */
     private $domains_info = [];
@@ -321,6 +330,7 @@ class Validator
     {
         // Query the MTAs on each domain if we have them
         foreach ($this->domains as $domain => $users) {
+            $this->currentDomain = $domain;
             $mxs = $this->buildMxs($domain);
 
             $this->debug('MX records (' . $domain . '): ' . print_r($mxs, true));
@@ -403,6 +413,7 @@ class Validator
             // Unexpected responses handled as $this->no_comm_is_valid, that way anyone can
             // decide for themselves if such results are considered valid or not
             $this->setDomainResults($users, $domain, $this->no_comm_is_valid);
+            $this->storeSmtpException($e);
         } catch (TimeoutException $e) {
             // A timeout is a comm failure, so treat the results on that domain
             // according to $this->no_comm_is_valid as well
@@ -471,15 +482,20 @@ class Validator
      * Get validation results
      *
      * @param bool $include_domains_info Whether to include extra info in the results
+     * @param bool $include_result_info Whether to include extra info in the results
      *
      * @return array
      */
-    public function getResults(bool $include_domains_info = true): array
+    public function getResults(bool $include_domains_info = true, $include_result_info = true): array
     {
         if ($include_domains_info) {
             $this->results['domains'] = $this->domains_info;
         } else {
             unset($this->results['domains']);
+        }
+
+        if (!$include_result_info) {
+            unset($this->results['smtpErrors']);
         }
 
         return $this->results;
@@ -531,15 +547,17 @@ class Validator
         // Open connection
         $this->debug('Connecting to ' . $this->host . ' (timeout: ' . $this->connect_timeout . ')');
         // @codingStandardsIgnoreLine
-        $this->socket = /** @scrutinizer ignore-unhandled */ @stream_socket_client(
-            $this->host,
-            $errnum,
-            $errstr,
-            $this->connect_timeout,
-            STREAM_CLIENT_CONNECT,
-            stream_context_create($this->stream_context_args)
-        );
-        
+        $this->socket =
+            /** @scrutinizer ignore-unhandled */
+            @stream_socket_client(
+                $this->host,
+                $errnum,
+                $errstr,
+                $this->connect_timeout,
+                STREAM_CLIENT_CONNECT,
+                stream_context_create($this->stream_context_args)
+            );
+
         // Clear any errors that may have happened due to @ suppression above: https://github.com/zytzagoo/smtp-validate-email/issues/77
         error_clear_last();
 
@@ -635,6 +653,7 @@ class Validator
             // Connected, but got an unexpected response, so disconnect
             $result = false;
             $this->debug('Unexpected response after connecting: ' . $e->getMessage());
+            $this->storeSmtpException($e);
             $this->disconnect(false);
         }
 
@@ -697,6 +716,7 @@ class Validator
 
             // Got something unexpected in response to MAIL FROM
             $this->debug("Unexpected response to MAIL FROM\n:" . $e->getMessage());
+            $this->storeSmtpException($e);
 
             // Hotmail has been known to do this + was closing the connection
             // forcibly on their end, so we're killing the socket here too
@@ -743,6 +763,7 @@ class Validator
                 $valid               = true;
             } catch (UnexpectedResponseException $e) {
                 $this->debug('Unexpected response to RCPT TO: ' . $e->getMessage());
+                $this->storeSmtpException($e, $to);
             }
         } catch (Exception $e) {
             $this->debug('Sending RCPT TO failed: ' . $e->getMessage());
@@ -790,7 +811,7 @@ class Validator
         if ($this->state['helo']) {
             $this->send('QUIT');
             $this->expect(
-                [self::SMTP_GENERIC_SUCCESS,self::SMTP_QUIT_SUCCESS],
+                [self::SMTP_GENERIC_SUCCESS, self::SMTP_QUIT_SUCCESS],
                 $this->command_timeouts['quit'],
                 true
             );
@@ -917,7 +938,7 @@ class Validator
         $text = '';
 
         try {
-            $line = $this->recv($timeout);
+            $firstLine = $line = $this->recv($timeout);
             $text = $line;
             while (preg_match('/^\d+-/', $line)) {
                 $line  = $this->recv($timeout);
@@ -925,9 +946,11 @@ class Validator
             }
             sscanf($line, '%d%s', $code, $text);
             // TODO/FIXME: This is terrible to read/comprehend
-            if ($code === self::SMTP_SERVICE_UNAVAILABLE ||
-                (false === $empty_response_allowed && (null === $code || !in_array($code, $codes, true)))) {
-                throw new UnexpectedResponseException($line);
+            if (
+                $code === self::SMTP_SERVICE_UNAVAILABLE ||
+                (false === $empty_response_allowed && (null === $code || !in_array($code, $codes, true)))
+            ) {
+                throw new UnexpectedResponseException($firstLine, $code);
             }
         } catch (NoResponseException $e) {
             /**
@@ -1283,6 +1306,29 @@ class Validator
         }
 
         return $ip . ':' . $port;
+    }
+
+    /**
+     * Store SMTP result code in case of an exception.
+     *
+     * @param Exception $e Exception
+     * @param string|null $to Recipient address if distinct
+     *
+     * @return void
+     */
+    protected function storeSmtpException(Exception $e, ?string $to = null)
+    {
+        if (null === $to) {
+            foreach ($this->domains[$this->currentDomain] as $user) {
+                $to = $user . '@' . $this->currentDomain;
+                $this->storeSmtpException($e, $to);
+            }
+        } else {
+            if (!isset($this->results['smtpErrors'][$to]['code']) || $this->results['smtpErrors'][$to]['code'] < $e->getCode()) {
+                $this->results['smtpErrors'][$to]['code'] = $e->getCode();
+                $this->results['smtpErrors'][$to]['message'] = $e->getMessage();
+            }
+        }
     }
 
     /**
