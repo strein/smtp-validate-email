@@ -338,27 +338,32 @@ class Validator
         foreach ($this->domains as $domain => $users) {
             $this->currentDomain = $domain;
             $mxs = $this->buildMxs($domain);
-            if (count($this->ignore_mxs) > 0 && count($mxs) > 0) {
-                $ignored = array_filter(
-                    $this->ignore_mxs,
-                    function ($ignore) use ($mxs) {
-                        return str_ends_with(strtolower(array_key_first($mxs)), $ignore);
+            try {
+                if (count($this->ignore_mxs) > 0 && count($mxs) > 0) {
+                    $ignored = array_filter(
+                        $this->ignore_mxs,
+                        function ($ignore) use ($mxs) {
+                            return str_ends_with(strtolower(array_key_first($mxs)), $ignore);
+                        }
+                    );
+                    if (count($ignored) > 0) {
+                        $this->debug('MX on ignore list (' . $ignored[0] . ')');
+                        throw new IgnoredMxException('MX on ignore list (' . $ignored[0] . ')', 900);
                     }
-                );
-                if (count($ignored) > 0) {
-                    $this->debug('MX on ignore list (' . $ignored[0] . ')');
-                    throw new IgnoredMxException('MX on ignore list (' . $ignored[0] . ')');
                 }
-            }
-            $this->debug('MX records (' . $domain . '): ' . print_r($mxs, true));
-            $this->domains_info[$domain]          = [];
-            $this->domains_info[$domain]['users'] = $users;
-            $this->domains_info[$domain]['mxs']   = $mxs;
+                $this->debug('MX records (' . $domain . '): ' . print_r($mxs, true));
+                $this->domains_info[$domain]          = [];
+                $this->domains_info[$domain]['users'] = $users;
+                $this->domains_info[$domain]['mxs']   = $mxs;
 
-            // Set default results as though we can't communicate at all...
-            $this->setDomainResults($users, $domain, $this->no_conn_is_valid);
-            $this->attemptConnection($mxs);
-            $this->performSmtpDance($domain, $users);
+                // Set default results as though we can't communicate at all...
+                $this->setDomainResults($users, $domain, $this->no_conn_is_valid);
+                $this->attemptConnection($mxs);
+                $this->performSmtpDance($domain, $users);
+            } catch (IgnoredMxException $e) {
+                $this->setDomainResults($users, $domain, $this->no_conn_is_valid);
+                $this->storeSmtpException($e);
+            }
         }
     }
 
