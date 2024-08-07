@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace SMTPValidateEmail;
 
@@ -11,6 +13,7 @@ use SMTPValidateEmail\Exceptions\NoHelo as NoHeloException;
 use SMTPValidateEmail\Exceptions\NoMailFrom as NoMailFromException;
 use SMTPValidateEmail\Exceptions\NoResponse as NoResponseException;
 use SMTPValidateEmail\Exceptions\SendFailed as SendFailedException;
+use SMTPValidateEmail\Exceptions\IgnoredMx as IgnoredMxException;
 
 class Validator
 {
@@ -174,6 +177,11 @@ class Validator
     private $domains_info = [];
 
     /**
+     * @var array
+     */
+    public $ignore_mxs = [];
+
+    /**
      * Default connect timeout for each MTA attempted (seconds)
      *
      * @var int
@@ -322,7 +330,18 @@ class Validator
         // Query the MTAs on each domain if we have them
         foreach ($this->domains as $domain => $users) {
             $mxs = $this->buildMxs($domain);
-
+            if (count($this->ignore_mxs) > 0 && count($mxs) > 0) {
+                $ignored = array_filter(
+                    $this->ignore_mxs,
+                    function ($ignore) use ($mxs) {
+                        return str_ends_with(strtolower(array_key_first($mxs)), $ignore);
+                    }
+                );
+                if (count($ignored) > 0) {
+                    $this->debug('MX on ignore list (' . $ignored[0] . ')');
+                    throw new IgnoredMxException('MX on ignore list (' . $ignored[0] . ')');
+                }
+            }
             $this->debug('MX records (' . $domain . '): ' . print_r($mxs, true));
             $this->domains_info[$domain]          = [];
             $this->domains_info[$domain]['users'] = $users;
@@ -531,15 +550,17 @@ class Validator
         // Open connection
         $this->debug('Connecting to ' . $this->host . ' (timeout: ' . $this->connect_timeout . ')');
         // @codingStandardsIgnoreLine
-        $this->socket = /** @scrutinizer ignore-unhandled */ @stream_socket_client(
-            $this->host,
-            $errnum,
-            $errstr,
-            $this->connect_timeout,
-            STREAM_CLIENT_CONNECT,
-            stream_context_create($this->stream_context_args)
-        );
-        
+        $this->socket =
+            /** @scrutinizer ignore-unhandled */
+            @stream_socket_client(
+                $this->host,
+                $errnum,
+                $errstr,
+                $this->connect_timeout,
+                STREAM_CLIENT_CONNECT,
+                stream_context_create($this->stream_context_args)
+            );
+
         // Clear any errors that may have happened due to @ suppression above: https://github.com/zytzagoo/smtp-validate-email/issues/77
         error_clear_last();
 
@@ -790,7 +811,7 @@ class Validator
         if ($this->state['helo']) {
             $this->send('QUIT');
             $this->expect(
-                [self::SMTP_GENERIC_SUCCESS,self::SMTP_QUIT_SUCCESS],
+                [self::SMTP_GENERIC_SUCCESS, self::SMTP_QUIT_SUCCESS],
                 $this->command_timeouts['quit'],
                 true
             );
@@ -925,8 +946,10 @@ class Validator
             }
             sscanf($line, '%d%s', $code, $text);
             // TODO/FIXME: This is terrible to read/comprehend
-            if ($code === self::SMTP_SERVICE_UNAVAILABLE ||
-                (false === $empty_response_allowed && (null === $code || !in_array($code, $codes, true)))) {
+            if (
+                $code === self::SMTP_SERVICE_UNAVAILABLE ||
+                (false === $empty_response_allowed && (null === $code || !in_array($code, $codes, true)))
+            ) {
                 throw new UnexpectedResponseException($line);
             }
         } catch (NoResponseException $e) {
