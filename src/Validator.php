@@ -347,8 +347,8 @@ class Validator
                         }
                     );
                     if (count($ignored) > 0) {
-                        $this->debug('MX on ignore list (' . $ignored[0] . ')');
-                        throw new IgnoredMxException('MX on ignore list (' . $ignored[0] . ')', 900);
+                        $this->debug('MX on ignore list (' . reset($ignored) . ')');
+                        throw new IgnoredMxException('MX on ignore list (' . reset($ignored) . ')', 900);
                     }
                 }
                 $this->debug('MX records (' . $domain . '): ' . print_r($mxs, true));
