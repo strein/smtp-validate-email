@@ -414,6 +414,7 @@ class Validator
             // decide for themselves if such results are considered valid or not
             $this->setDomainResults($users, $domain, $this->no_comm_is_valid);
             $this->storeSmtpException($e);
+            $this->disconnect(false);
         } catch (TimeoutException $e) {
             // A timeout is a comm failure, so treat the results on that domain
             // according to $this->no_comm_is_valid as well
@@ -513,7 +514,9 @@ class Validator
     private function setDomainResults(array $users, string $domain, bool $val): void
     {
         foreach ($users as $user) {
-            $this->results[$user . '@' . $domain] = $val;
+            // Don't overwrite an individual result with a domain result
+            if (!isset($this->results[$user . '@' . $domain]))
+                $this->results[$user . '@' . $domain] = $val;
         }
     }
 
