@@ -13,6 +13,7 @@ use SMTPValidateEmail\Exceptions\NoHelo as NoHeloException;
 use SMTPValidateEmail\Exceptions\NoMailFrom as NoMailFromException;
 use SMTPValidateEmail\Exceptions\NoResponse as NoResponseException;
 use SMTPValidateEmail\Exceptions\SendFailed as SendFailedException;
+use SMTPValidateEmail\Exceptions\IgnoredMx as IgnoredMxException;
 
 class Validator
 {
@@ -183,6 +184,11 @@ class Validator
     private $domains_info = [];
 
     /**
+     * @var array
+     */
+    public $ignore_mxs = [];
+
+    /**
      * Default connect timeout for each MTA attempted (seconds)
      *
      * @var int
@@ -332,7 +338,18 @@ class Validator
         foreach ($this->domains as $domain => $users) {
             $this->currentDomain = $domain;
             $mxs = $this->buildMxs($domain);
-
+            if (count($this->ignore_mxs) > 0 && count($mxs) > 0) {
+                $ignored = array_filter(
+                    $this->ignore_mxs,
+                    function ($ignore) use ($mxs) {
+                        return str_ends_with(strtolower(array_key_first($mxs)), $ignore);
+                    }
+                );
+                if (count($ignored) > 0) {
+                    $this->debug('MX on ignore list (' . $ignored[0] . ')');
+                    throw new IgnoredMxException('MX on ignore list (' . $ignored[0] . ')');
+                }
+            }
             $this->debug('MX records (' . $domain . '): ' . print_r($mxs, true));
             $this->domains_info[$domain]          = [];
             $this->domains_info[$domain]['users'] = $users;
