@@ -975,7 +975,7 @@ class Validator
                 $code === self::SMTP_SERVICE_UNAVAILABLE ||
                 (false === $empty_response_allowed && (null === $code || !in_array($code, $codes, true)))
             ) {
-                throw new UnexpectedResponseException($firstLine, $code);
+                throw new UnexpectedResponseException($firstLine, $code ?: 0);
             }
         } catch (NoResponseException $e) {
             /**
